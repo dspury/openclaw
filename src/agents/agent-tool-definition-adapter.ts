@@ -141,6 +141,26 @@ function kindForLog(value: unknown): string {
   return typeof value;
 }
 
+function sanitizeGeneralToolParamsForLog(value: unknown, depth = 0): unknown {
+  if (depth > 10) return "[depth limit]";
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return `[redacted string len=${value.length}]`;
+  if (typeof value === "number") return "[redacted number]";
+  if (typeof value === "boolean") return "[redacted boolean]";
+  if (typeof value === "bigint") return "[redacted bigint]";
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeGeneralToolParamsForLog(item, depth + 1));
+  }
+  if (isPlainObject(value)) {
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, field] of Object.entries(value)) {
+      sanitized[key] = sanitizeGeneralToolParamsForLog(field, depth + 1);
+    }
+    return sanitized;
+  }
+  return `[redacted ${kindForLog(value)}]`;
+}
+
 function summarizeSensitiveValueForLog(params: {
   value: unknown;
   reason: string;
@@ -209,7 +229,8 @@ function sanitizeExecFailureParamsForLog(value: unknown): unknown {
 }
 
 function sanitizeToolFailureParamsForLog(toolName: string, value: unknown): unknown {
-  return toolName === "exec" ? sanitizeExecFailureParamsForLog(value) : value;
+  if (toolName === "exec") return sanitizeExecFailureParamsForLog(value);
+  return sanitizeGeneralToolParamsForLog(value);
 }
 
 function describeToolFailureInputs(params: {

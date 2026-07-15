@@ -74,7 +74,7 @@ describe("agent tool definition adapter logging", () => {
     await def.execute("call-edit-1", { path: "notes.txt" }, undefined, undefined, extensionContext);
 
     expect(firstLogErrorMessage()).toContain(
-      '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
+      '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"[redacted string len=9]"}',
     );
   });
 
@@ -390,5 +390,160 @@ describe("agent tool definition adapter logging", () => {
 
     expect(execute).toHaveBeenCalledWith("call-edit-batch", payload, undefined, undefined);
     expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("redacts cron-like params with gatewayToken on failure", async () => {
+    const baseTool = {
+      name: "cron",
+      label: "Cron",
+      description: "manages cron jobs",
+      parameters: Type.Object({
+        action: Type.String(),
+        gatewayToken: Type.String(),
+        job: Type.Object({
+          name: Type.String(),
+          delivery: Type.Object({
+            channel: Type.String(),
+            mode: Type.String(),
+          }),
+        }),
+      }),
+      execute: async () => {
+        throw new Error("cron action failed");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) throw new Error("missing tool definition");
+
+    await def.execute(
+      "call-cron-1",
+      {
+        action: "add",
+        gatewayToken: "6bbe83abcdef1234567890abcdef1234567890abcdef1234",
+        job: {
+          name: "Test Job",
+          delivery: { channel: "discord", mode: "announce" },
+        },
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain("[tools] cron failed: cron action failed");
+    expect(message).toContain('"action":"[redacted string len=3]"');
+    expect(message).toContain('"gatewayToken":"[redacted string len=48]"');
+    expect(message).toContain('"name":"[redacted string len=8]"');
+    expect(message).toContain('"channel":"[redacted string len=7]"');
+    expect(message).not.toContain("6bbe83");
+    expect(message).not.toContain("discord");
+    expect(message).not.toContain("Test Job");
+  });
+
+  it("redacts nested params preserving key structure", async () => {
+    const baseTool = {
+      name: "edit",
+      label: "Edit",
+      description: "edits files",
+      parameters: Type.Object({
+        path: Type.String(),
+        edits: Type.Array(
+          Type.Object({
+            oldText: Type.String(),
+            newText: Type.String(),
+          }),
+        ),
+      }),
+      execute: async () => {
+        throw new Error("edit failed");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) throw new Error("missing tool definition");
+
+    await def.execute(
+      "call-edit-nested",
+      {
+        path: "/etc/passwd",
+        edits: [{ oldText: "root", newText: "admin" }],
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain('"path":"[redacted string len=11]"');
+    expect(message).toContain('"oldText":"[redacted string len=4]"');
+    expect(message).toContain('"newText":"[redacted string len=5]"');
+    expect(message).not.toContain("/etc/passwd");
+    expect(message).not.toContain("root");
+    expect(message).not.toContain("admin");
+  });
+
+  it("redacts numeric values in non-exec tool params", async () => {
+    const baseTool = {
+      name: "cron",
+      label: "Cron",
+      description: "manages cron jobs",
+      parameters: Type.Object({
+        action: Type.String(),
+        timeoutSeconds: Type.Number(),
+        enabled: Type.Boolean(),
+      }),
+      execute: async () => {
+        throw new Error("cron failed");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) throw new Error("missing tool definition");
+
+    await def.execute(
+      "call-cron-nums",
+      { action: "run", timeoutSeconds: 90, enabled: true },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain('"action":"[redacted string len=3]"');
+    expect(message).toContain('"timeoutSeconds":"[redacted number]"');
+    expect(message).toContain('"enabled":"[redacted boolean]"');
+    expect(message).not.toContain("90");
+    expect(message).not.toContain("true");
+  });
+
+  it("redacts raw and effective params independently", async () => {
+    const baseTool = {
+      name: "gateway",
+      label: "Gateway",
+      description: "manages gateway",
+      parameters: Type.Object({
+        action: Type.String(),
+        note: Type.String(),
+      }),
+      execute: async () => {
+        throw new Error("gateway action failed");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) throw new Error("missing tool definition");
+
+    await def.execute(
+      "call-gateway-1",
+      { action: "restart", note: "deployed v2.1" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain("raw_params");
+    expect(message).toContain('"action":"[redacted string len=7]"');
+    expect(message).toContain('"note":"[redacted string len=13]"');
+    expect(message).not.toContain("restart");
+    expect(message).not.toContain("deployed v2.1");
   });
 });
